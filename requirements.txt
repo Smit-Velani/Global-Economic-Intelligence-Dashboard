@@ -1,0 +1,13 @@
+flask
+flask-socketio
+eventlet
+requests
+pandas
+numpy
+statsmodels
+scikit-learn
+nltk
+vaderSentiment
+groq
+plotly
+wbgapi

@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Global Economic Intelligence Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/topojson@3/dist/topojson.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+
+<nav>
+    <div class="nav-logo">Global Economic Intelligence</div>
+    <div class="nav-center">
+        <a href="#map">Map</a>
+        <a href="#top10">Top 10</a>
+        <a href="#race">GDP Race</a>
+        <a href="#comparison">Compare</a>
+    </div>
+    <div class="nav-live">
+        <span class="live-dot"></span>
+        <span id="live-label">Connecting...</span>
+        <span id="last-updated" class="last-updated"></span>
+    </div>
+</nav>
+
+<div class="hero">
+    <div class="hero-badge">Real-Time · AI-Powered · 190+ Countries</div>
+    <h1>Global Economic<br><span>Intelligence Dashboard</span></h1>
+    <p>Click any country to explore GDP forecasts, recession risk, AI summaries, similar economies and live news sentiment</p>
+</div>
+
+<div class="dashboard">
+
+    <!-- Map Section -->
+    <div class="card full-width" id="map">
+        <div class="card-header">
+            <h2>World GDP Map</h2>
+            <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap;">
+                <div class="metric-toggle">
+                    <button class="metric-btn active" onclick="switchMetric('gdp', event)">GDP</button>
+                    <button class="metric-btn" onclick="switchMetric('gdp_per_capita', event)">Per Capita</button>
+                    <button class="metric-btn" onclick="switchMetric('inflation', event)">Inflation</button>
+                    <button class="metric-btn" onclick="switchMetric('unemployment', event)">Unemployment</button>
+                </div>
+                <div class="legend">
+                    <span class="legend-item low">Low</span>
+                    <span class="legend-item mid">Medium</span>
+                    <span class="legend-item high">High</span>
+                </div>
+            </div>
+        </div>
+        <div class="map-search">
+            <input type="text" id="country-search" placeholder="Search any country..." class="search-input">
+            <div id="search-results" class="search-results"></div>
+        </div>
+        <div id="world-map"></div>
+    </div>
+
+    <!-- Country Detail Panel -->
+    <div class="card detail-card" id="country-panel" style="display:none">
+        <div class="card-header">
+            <h2 id="country-name">Select a Country</h2>
+            <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                <span id="sentiment-badge" class="badge">Neutral</span>
+                <span id="risk-badge" class="badge">Risk: —</span>
+                <button class="btn-download" onclick="downloadReport()">Download Report</button>
+            </div>
+        </div>
+
+        <div class="summary-box">
+            <div class="summary-label">AI Economic Summary · Powered by Groq LLaMA</div>
+            <p id="ai-summary">Click a country to load AI summary...</p>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-box">
+                <div class="stat-label">GDP</div>
+                <div class="stat-value" id="stat-gdp">—</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">GDP Per Capita</div>
+                <div class="stat-value" id="stat-gdppc">—</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">GDP Growth</div>
+                <div class="stat-value" id="stat-growth">—</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Population</div>
+                <div class="stat-value" id="stat-pop">—</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Inflation</div>
+                <div class="stat-value" id="stat-inf">—</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Unemployment</div>
+                <div class="stat-value" id="stat-unem">—</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Health Score</div>
+                <div class="stat-value" id="stat-health">—</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Currency vs USD</div>
+                <div class="stat-value" id="stat-currency">—</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">News Sentiment</div>
+                <div class="stat-value" id="stat-sent">—</div>
+            </div>
+        </div>
+
+        <!-- Health Gauge -->
+        <h3 class="section-subtitle">Economic Health Score</h3>
+        <div id="health-gauge"></div>
+
+        <!-- Recession Risk -->
+        <h3 class="section-subtitle">Recession Risk Predictor</h3>
+        <div id="recession-box" class="recession-box">
+            <div class="recession-bar-wrap">
+                <div class="recession-bar" id="recession-bar"></div>
+            </div>
+            <div class="recession-info">
+                <span id="recession-prob">—</span>
+                <span id="recession-level" class="recession-level">—</span>
+            </div>
+            <div id="recession-factors" class="recession-factors"></div>
+        </div>
+
+        <!-- Similar Countries -->
+        <h3 class="section-subtitle">Economically Similar Countries <span class="subtitle-note">via K-Means Clustering</span></h3>
+        <div id="similar-countries" class="similar-countries"></div>
+
+        <!-- GDP Forecast -->
+        <h3 class="section-subtitle">GDP Forecast (Next 5 Years)</h3>
+        <div id="forecast-chart"></div>
+
+        <!-- News Headlines -->
+        <h3 class="section-subtitle">Latest News Headlines</h3>
+        <div id="news-list"></div>
+    </div>
+
+    <!-- Top 10 Richest -->
+    <div class="card" id="top10">
+        <div class="card-header">
+            <h2>Top 10 Richest Countries</h2>
+            <span class="badge">By GDP Per Capita</span>
+        </div>
+        <div id="top10-list">Loading...</div>
+    </div>
+
+    <!-- GDP Bar Chart Race -->
+    <div class="card full-width" id="race">
+        <div class="card-header">
+            <h2>GDP Bar Chart Race — Top 10 Economies (2000–2024)</h2>
+            <div style="display:flex; gap:0.5rem;">
+                <button class="btn-action" onclick="startRace()">▶ Play</button>
+                <button class="btn-action btn-action-ghost" onclick="resetRace()">↺ Reset</button>
+            </div>
+        </div>
+        <div id="race-year" class="race-year">2000</div>
+        <div id="race-chart"></div>
+    </div>
+
+    <!-- Country Comparison -->
+    <div class="card full-width" id="comparison">
+        <div class="card-header">
+            <h2>Country Comparison</h2>
+            <span class="badge">Side-by-side analysis</span>
+        </div>
+        <div class="comparison-selectors">
+            <select id="country-select-1" class="country-select">
+                <option value="">Select Country 1</option>
+            </select>
+            <span class="vs-badge">VS</span>
+            <select id="country-select-2" class="country-select">
+                <option value="">Select Country 2</option>
+            </select>
+            <button id="compare-btn" class="btn-action">Compare</button>
+        </div>
+        <div id="comparison-result" style="display:none">
+            <div id="radar-chart"></div>
+            <div class="comparison-stats" id="comparison-stats"></div>
+        </div>
+    </div>
+
+</div>
+
+<footer>
+    <p>Built by <strong>Smitkumar Velani</strong> · Data: World Bank API · News: NewsAPI · AI: Groq LLaMA 3.3 · <a href="https://smit-velani.github.io" target="_blank">Portfolio</a></p>
+</footer>
+
+<script src="/static/dashboard.js"></script>
+</body>
+</html>
