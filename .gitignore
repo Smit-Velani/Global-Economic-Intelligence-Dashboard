@@ -1,4 +1,9 @@
 .env
 __pycache__/
 *.pyc
-mlruns/
+mlruns/.env
+.env.*
+!.env.example
+*.pyc
+*.backup
+*.step*.backup

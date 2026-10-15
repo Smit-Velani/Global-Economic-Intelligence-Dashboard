@@ -1,6 +1,6 @@
+
 flask
 flask-socketio
-eventlet
 requests
 pandas
 numpy
@@ -11,3 +11,4 @@ vaderSentiment
 groq
 plotly
 wbgapi
+python-dotenv

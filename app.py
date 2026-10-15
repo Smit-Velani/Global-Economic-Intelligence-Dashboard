@@ -10,6 +10,7 @@ from analysis.sentiment import get_news_sentiment
 from analysis.forecasting import get_gdp_forecast
 from analysis.clustering import build_clusters, get_similar_countries
 from analysis.recession import predict_recession
+from analysis.anomaly import detect_anomalies
 from groq import Groq
 import warnings
 warnings.filterwarnings('ignore')
@@ -17,18 +18,24 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
+
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'geoid-2026'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+app.config["SECRET_KEY"] = os.getenv(
+    "FLASK_SECRET_KEY",
+    "local-development-only-change-in-production"
+)
 
-# API Keys
-NEWS_API_KEY = "your_newsapi_key_here"
-GROQ_API_KEY = "your_groq_api_key_here"
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode="threading"
+)
 
-client = Groq(api_key=GROQ_API_KEY)
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
 
 # Cache
 _countries_cache = None
@@ -54,7 +61,28 @@ def fetch_countries_data():
 
         combined = pd.concat(dfs, axis=1).reset_index()
         combined.columns = ['country'] + list(indicators.values())
-        combined = combined.dropna(subset=['gdp'])
+        # Retain actual countries and territories, not regional aggregates.
+        valid_countries = {
+            c["id"]
+            for c in wb.economy.list()
+            if not c.get("aggregate", False)
+        }
+
+        combined = combined[
+            combined["country"].isin(valid_countries)
+        ].copy()
+
+        # Include countries with unavailable GDP data.
+        missing_countries = valid_countries - set(combined["country"])
+
+        if missing_countries:
+            extra = pd.DataFrame({
+                "country": sorted(missing_countries)
+            })
+            combined = pd.concat(
+                [combined, extra],
+                ignore_index=True
+            )
 
         countries_info = {}
         for c in wb.economy.list():
@@ -139,6 +167,13 @@ def get_countries():
 @app.route('/api/country/<country_code>')
 def get_country_detail(country_code):
     try:
+        # Ensure country data and K-Means clusters are initialized.
+        if _countries_cache is None:
+            if fetch_countries_data() is None:
+                return jsonify({
+                    "error": "Country data unavailable"
+                }), 503
+
         forecast = get_gdp_forecast(country_code)
 
         country_obj = wb.economy.get(country_code)
@@ -157,19 +192,58 @@ def get_country_detail(country_code):
                     row.get('gdp_growth'), row.get('inflation'), row.get('unemployment')
                 )
 
-        prompt = f"""Provide a brief 3-sentence economic summary of {country_name} as of 2026.
-        Include latest GDP figures, growth forecast, key challenges, and outlook. Be factual and concise."""
+        # Ground AI analysis in observed World Bank data.
+        def observed(value, unit=""):
+            if value is None or pd.isna(value):
+                return "Unavailable"
+            return f"{float(value):,.2f}{unit}"
+
+        row_df = _countries_cache[
+            _countries_cache["country"] == country_code
+        ]
+        row = row_df.iloc[0] if not row_df.empty else None
+
+        latest_history = forecast.get("historical", []) if isinstance(forecast, dict) else []
+        last_gdp = latest_history[-1] if latest_history else None
+
+        gdp_context = (
+            f"${last_gdp['gdp']:,.2f} billion in {last_gdp['year']}"
+            if last_gdp else "Unavailable"
+        )
+
+        growth = observed(row["gdp_growth"], "%") if row is not None else "Unavailable"
+        inflation = observed(row["inflation"], "%") if row is not None else "Unavailable"
+        unemployment = observed(row["unemployment"], "%") if row is not None else "Unavailable"
+
+        prompt = f"""Write exactly three concise sentences about the economy of {country_name}.
+
+Verified World Bank observations:
+- Latest nominal GDP: {gdp_context}
+- Latest available annual GDP growth: {growth}
+- Latest available inflation: {inflation}
+- Latest available unemployment: {unemployment}
+
+Rules:
+1. Use only the numerical facts supplied above.
+2. Do not invent GDP values, years, rates, forecasts, or external citations.
+3. Clearly distinguish historical economic observations from future outlook.
+4. If an indicator is unavailable, do not guess its value.
+5. Explain economic conditions and uncertainty without unsupported claims.
+"""
+
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[{"role": "user", "content": prompt}]
         )
         summary = response.choices[0].message.content
 
-        risk_response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": f"Based on {country_name}'s economy in 2026, give one word: Low, Medium, or High risk for investors. Reply with only one word."}]
-        )
-        risk_rating = risk_response.choices[0].message.content.strip()
+        # Deterministic economic-risk classification.
+        # This is a heuristic, not investment advice or a
+        # statistically calibrated recession probability.
+        risk_rating = recession.get("level", "Unknown")
+
+        if risk_rating not in ("Low", "Medium", "High"):
+            risk_rating = "Unknown"
 
         return jsonify({
             "country": country_name,
@@ -184,6 +258,22 @@ def get_country_detail(country_code):
         })
     except Exception as e:
         return jsonify({"error": str(e)})
+
+@app.route('/api/anomalies')
+def get_anomalies():
+    try:
+        result = detect_anomalies()
+
+        if "error" in result:
+            return jsonify(result), 500
+
+        return jsonify(result), 200
+
+    except Exception:
+        app.logger.exception("Anomaly detection failed")
+        return jsonify({
+            "error": "Anomaly detection failed"
+        }), 500
 
 @app.route('/api/top10')
 def get_top10():

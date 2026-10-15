@@ -12,6 +12,26 @@ def build_clusters(combined_df):
     try:
         features = ['gdp_per_capita', 'inflation', 'unemployment', 'gdp_growth']
         df = combined_df[['country', 'name'] + features].copy()
+
+        # Convert economic indicators to numeric values.
+        for feature in features:
+            df[feature] = pd.to_numeric(
+                df[feature], errors='coerce'
+            )
+
+        df[features] = df[features].replace(
+            [np.inf, -np.inf], np.nan
+        )
+
+        # Exclude countries with no available indicators.
+        df = df.dropna(subset=features, how='all').copy()
+
+        # Median imputation is used ONLY for clustering.
+        # Original World Bank values remain unchanged.
+        medians = df[features].median()
+        df[features] = df[features].fillna(medians)
+
+        # Remove rows that still cannot be processed.
         df = df.dropna(subset=features)
 
         if len(df) < 10:
